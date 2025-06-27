@@ -25,9 +25,18 @@ class Database:
                     period TEXT NOT NULL,
                     status TEXT DEFAULT 'active',
                     notifications_enabled BOOLEAN DEFAULT 1,
+                    notification_time TEXT DEFAULT '09:00',
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            
+            # Добавляем поле notification_time, если его нет
+            try:
+                cursor.execute('ALTER TABLE subscriptions ADD COLUMN notification_time TEXT DEFAULT "09:00"')
+                conn.commit()
+            except sqlite3.OperationalError:
+                # Поле уже существует
+                pass
             
             # Таблица истории списаний
             cursor.execute('''
@@ -106,6 +115,18 @@ class Database:
                 SELECT * FROM subscriptions 
                 WHERE status = 'active' AND notifications_enabled = 1
             ''')
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def get_subscriptions_for_time_notification(self, target_time: str) -> List[Dict]:
+        """Получение подписок для отправки уведомлений в определенное время"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM subscriptions 
+                WHERE status = 'active' AND notifications_enabled = 1 
+                AND notification_time = ?
+            ''', (target_time,))
             return [dict(row) for row in cursor.fetchall()]
     
     def get_total_expenses(self, user_id: int, period: str = 'monthly') -> float:
