@@ -9,7 +9,7 @@ from utils import (
     format_subscription_info, validate_date, validate_price, 
     create_expense_chart, export_to_excel, calculate_next_payment_date, parse_date_flexible
 )
-from config import SUBSCRIPTION_PERIODS, SUBSCRIPTION_STATUSES
+from config import SUBSCRIPTION_PERIODS, SUBSCRIPTION_STATUSES, NOTIFICATION_TIMES
 
 # Логирование
 logger = logging.getLogger(__name__)
@@ -105,6 +105,14 @@ class SubscriptionBot:
             await self.export_data(query, context)
         elif query.data == "settings":
             await self.show_settings(query, context)
+        elif query.data == "settings_notifications":
+            await self.show_notifications_settings(query, context)
+        elif query.data == "settings_notification_time":
+            await self.show_notification_time_settings(query, context)
+        elif query.data.startswith("change_notification_time_"):
+            await self.change_notification_time_menu(query, context)
+        elif query.data.startswith("set_notification_time_"):
+            await self.set_notification_time(query, context)
         elif query.data.startswith("edit_"):
             await self.edit_subscription_menu(query, context)
         elif query.data.startswith("delete_"):
@@ -283,7 +291,7 @@ class SubscriptionBot:
             f"📋 Название: {data['name']}\n"
             f"💰 Цена: {data['price']} ₽\n"
             f"📅 Периодичность: {SUBSCRIPTION_PERIODS[period]}\n"
-            f"📆 Дата начала: {data['start_date']}\n\n"
+            f"📆 Дата начала: {datetime.datetime.strptime(data['start_date'], '%Y-%m-%d').strftime('%d.%m.%Y')}\n\n"
             f"ID подписки: {subscription_id}",
             parse_mode='HTML'
         )
@@ -431,24 +439,14 @@ class SubscriptionBot:
     
     async def show_settings(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE):
         """Показ настроек"""
-        user_id = query.from_user.id
-        subscriptions = self.db.get_user_subscriptions(user_id, 'active')
-        
         message = "⚙️ <b>Настройки</b>\n\n"
-        message += "🔔 <b>Уведомления по подпискам:</b>\n"
+        message += "Выберите раздел настроек:"
         
-        keyboard = []
-        for sub in subscriptions:
-            status = "🔔 Включены" if sub['notifications_enabled'] else "🔕 Отключены"
-            message += f"• {sub['name']}: {status}\n"
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"{'🔕' if sub['notifications_enabled'] else '🔔'} {sub['name']}", 
-                    callback_data=f"toggle_notifications_{sub['id']}"
-                )
-            ])
-        
-        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")])
+        keyboard = [
+            [InlineKeyboardButton("🔔 Уведомления", callback_data="settings_notifications")],
+            [InlineKeyboardButton("⏰ Время уведомлений", callback_data="settings_notification_time")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
@@ -469,7 +467,7 @@ class SubscriptionBot:
         await query.answer(f"🔔 Уведомления {status_text}")
         
         # Обновляем меню настроек
-        await self.show_settings(query, context)
+        await self.show_notifications_settings(query, context)
     
     async def edit_subscription_menu(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE):
         """Меню редактирования подписки"""
@@ -716,9 +714,10 @@ class SubscriptionBot:
         keyboard = []
         for i, sub in enumerate(subscriptions, 1):
             status = SUBSCRIPTION_STATUSES.get(sub['status'], sub['status'])
+            start_date = datetime.datetime.strptime(sub['start_date'], '%Y-%m-%d').strftime('%d.%m.%Y')
             message += f"{i}. <b>{sub['name']}</b>\n"
             message += f"   💰 {sub['price']} ₽ | 📅 {SUBSCRIPTION_PERIODS.get(sub['period'], sub['period'])} | 📊 {status}\n"
-            message += f"   📆 Дата начала: {sub['start_date']}\n"
+            message += f"   📆 Дата начала: {start_date}\n"
             keyboard.append([InlineKeyboardButton(f"{i}. Изменить статус", callback_data=f"change_status_{sub['id']}")])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")])
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -741,4 +740,96 @@ class SubscriptionBot:
         subscription_id = int(parts[0])
         new_status = '_'.join(parts[1:])
         self.db.update_subscription(subscription_id, status=new_status)
-        await self.show_inactive_subscriptions(query, context) 
+        await self.show_inactive_subscriptions(query, context)
+
+    async def show_notifications_settings(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE):
+        """Показ настроек уведомлений"""
+        user_id = query.from_user.id
+        subscriptions = self.db.get_user_subscriptions(user_id, 'active')
+        
+        message = "🔔 <b>Настройки уведомлений</b>\n\n"
+        message += "Управление уведомлениями по подпискам:\n\n"
+        
+        keyboard = []
+        for sub in subscriptions:
+            status = "🔔 Включены" if sub['notifications_enabled'] else "🔕 Отключены"
+            message += f"• {sub['name']}: {status}\n"
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{'🔕' if sub['notifications_enabled'] else '🔔'} {sub['name']}", 
+                    callback_data=f"toggle_notifications_{sub['id']}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
+    
+    async def show_notification_time_settings(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE):
+        """Показ настроек времени уведомлений"""
+        user_id = query.from_user.id
+        subscriptions = self.db.get_user_subscriptions(user_id, 'active')
+        
+        message = "⏰ <b>Настройки времени уведомлений</b>\n\n"
+        message += "Выберите подписку для изменения времени уведомлений:\n\n"
+        
+        keyboard = []
+        for sub in subscriptions:
+            current_time = sub.get('notification_time', '09:00')
+            message += f"• {sub['name']}: {current_time}\n"
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"⏰ {sub['name']} ({current_time})", 
+                    callback_data=f"change_notification_time_{sub['id']}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
+    
+    async def change_notification_time_menu(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE):
+        """Меню выбора времени уведомлений"""
+        subscription_id = int(query.data.replace("change_notification_time_", ""))
+        subscription = self.db.get_subscription(subscription_id)
+        
+        if not subscription:
+            await query.answer("❌ Подписка не найдена")
+            return
+        
+        context.user_data['change_time_subscription_id'] = subscription_id
+        
+        message = f"⏰ <b>Выбор времени уведомлений</b>\n\n"
+        message += f"Подписка: <b>{subscription['name']}</b>\n"
+        message += f"Текущее время: <b>{subscription.get('notification_time', '09:00')}</b>\n\n"
+        message += "Выберите новое время:"
+        
+        keyboard = []
+        for time_key, time_label in NOTIFICATION_TIMES.items():
+            keyboard.append([InlineKeyboardButton(time_label, callback_data=f"set_notification_time_{subscription_id}_{time_key}")])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="settings_notification_time")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
+    
+    async def set_notification_time(self, query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE):
+        """Установка времени уведомлений"""
+        data = query.data.replace("set_notification_time_", "")
+        parts = data.split("_")
+        subscription_id = int(parts[0])
+        new_time = '_'.join(parts[1:])
+        
+        subscription = self.db.get_subscription(subscription_id)
+        if not subscription:
+            await query.answer("❌ Подписка не найдена")
+            return
+        
+        self.db.update_subscription(subscription_id, notification_time=new_time)
+        
+        await query.answer(f"⏰ Время уведомлений изменено на {new_time}")
+        
+        # Возвращаемся к настройкам времени
+        await self.show_notification_time_settings(query, context) 

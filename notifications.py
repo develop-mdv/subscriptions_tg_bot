@@ -5,6 +5,7 @@ from telegram import Bot
 from database import Database
 from utils import calculate_next_payment_date, days_until_payment
 from config import NOTIFICATION_DAYS_BEFORE
+import sqlite3
 
 class NotificationManager:
     def __init__(self, bot: Bot, db: Database):
@@ -13,8 +14,11 @@ class NotificationManager:
     
     async def check_and_send_notifications(self):
         """Проверка и отправка уведомлений"""
-        subscriptions = self.db.get_subscriptions_for_notification()
-        today = datetime.date.today()
+        current_time = datetime.datetime.now()
+        current_time_str = current_time.strftime('%H:%M')
+        
+        # Получаем подписки для текущего времени
+        subscriptions = self.db.get_subscriptions_for_time_notification(current_time_str)
         
         for subscription in subscriptions:
             next_payment = calculate_next_payment_date(subscription['start_date'], subscription['period'])
@@ -100,13 +104,32 @@ class NotificationManager:
         except Exception as e:
             print(f"Ошибка отправки сводки: {e}")
     
+    async def check_and_send_daily_summaries(self):
+        """Проверка и отправка ежедневных сводок в выбранное время"""
+        current_time = datetime.datetime.now()
+        current_time_str = current_time.strftime('%H:%M')
+        
+        # Получаем всех пользователей с активными подписками в текущее время
+        with sqlite3.connect(self.db.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT DISTINCT user_id FROM subscriptions 
+                WHERE status = 'active' AND notifications_enabled = 1 
+                AND notification_time = ?
+            ''', (current_time_str,))
+            user_ids = [row[0] for row in cursor.fetchall()]
+        
+        for user_id in user_ids:
+            await self.send_daily_summary(user_id)
+    
     async def run_notification_loop(self):
         """Основной цикл уведомлений"""
         while True:
             try:
                 await self.check_and_send_notifications()
-                # Проверяем каждые 6 часов
-                await asyncio.sleep(6 * 60 * 60)
+                await self.check_and_send_daily_summaries()
+                # Проверяем каждую минуту для более точного времени уведомлений
+                await asyncio.sleep(60)
             except Exception as e:
                 print(f"Ошибка в цикле уведомлений: {e}")
                 await asyncio.sleep(60)  # Ждем минуту перед повторной попыткой 
